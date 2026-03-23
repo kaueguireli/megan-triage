@@ -383,7 +383,7 @@ const DEMO=[
 
 if(!emails) emails=JSON.parse(JSON.stringify(DEMO));
 
-window.addEventListener('load',()=>{ if(!checkOAuth()) { if(emails.length) showApp(); } });
+window.addEventListener('load',()=>{ if(!checkOAuth()){ const tk=sessionStorage.getItem('gtk'); if(tk){ showApp(); }else{ document.getElementById('auth').style.display='flex'; document.getElementById('app').style.display='none'; } } });
 
 function checkOAuth(){
   const h=window.location.hash;
