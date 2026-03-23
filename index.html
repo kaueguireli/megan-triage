@@ -319,8 +319,8 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
       <div id="pane-content" style="display:none;flex:1;display:none;flex-direction:column;overflow:hidden;">
         <div class="pane-header">
           <div class="pane-subject" id="pane-subj"></div>
-          <div class="pane-meta"><strong id="pane-from"></strong> &lt;<span id="pane-email"></span>&gt;</div>
-          <div class="pane-date" id="pane-date"></div>
+          <div class="pane-meta" id="pane-meta-row" style="display:none;"><strong id="pane-from"></strong> &lt;<span id="pane-email"></span>&gt;</div>
+          <div class="pane-date" id="pane-date" style="display:none;"></div>
         </div>
         <div class="pane-actions">
           <span class="lbl">Move to:</span>
@@ -521,26 +521,26 @@ function switchTab(view, btn){
   document.getElementById('v-'+view).classList.add('on');
 }
 
-// ── GMAIL FETCH ──
+// ── GMAIL FETCH — THREADS ──
 async function fetchInbox(){
   if(!gmailToken) return;
   document.getElementById('slbl').textContent='Syncing…';
   document.getElementById('inbox-scroll').innerHTML='<div style="padding:24px;text-align:center;font-size:12px;color:var(--t3);">Loading emails…</div>';
   try{
-    const r=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=50&q=in:inbox');
+    // Fetch thread list from inbox
+    const r=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=40&q=in:inbox');
     const d=await r.json();
-    if(!d.messages){ renderInboxList([]); return; }
-    const msgs=[];
-    // fetch in parallel batches of 10
-    for(let i=0;i<Math.min(d.messages.length,40);i+=10){
-      const batch=d.messages.slice(i,i+10);
-      const results=await Promise.all(batch.map(m=>
-        gfetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`)
+    if(!d.threads){ renderInboxList([]); return; }
+    const threads=[];
+    for(let i=0;i<Math.min(d.threads.length,40);i+=8){
+      const batch=d.threads.slice(i,i+8);
+      const results=await Promise.all(batch.map(t=>
+        gfetch(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${t.id}?format=full`)
           .then(r=>{ if(!r.ok) throw new Error(r.status+''); return r.json(); })
       ));
-      msgs.push(...results);
+      threads.push(...results);
     }
-    inboxMsgs=msgs.map(parseMsg).filter(Boolean);
+    inboxMsgs=threads.map(parseThread).filter(Boolean);
     renderInboxList(inboxMsgs);
     updateInboxBadge();
   }catch(e){
@@ -549,10 +549,32 @@ async function fetchInbox(){
       sessionStorage.removeItem('gtk');
       document.getElementById('inbox-scroll').innerHTML='<div style="padding:24px;text-align:center;font-size:12px;color:var(--t3);">Session expired — <a href="#" onclick="doAuth()" style="color:var(--blu);">sign in again</a></div>';
     } else {
-      document.getElementById('inbox-scroll').innerHTML='<div style="padding:24px;text-align:center;font-size:12px;color:var(--t3);">Error loading emails. <a href="#" onclick="syncAll()" style="color:var(--blu);">Retry</a></div>';
+      document.getElementById('inbox-scroll').innerHTML='<div style="padding:24px;text-align:center;font-size:12px;color:var(--t3);">Error loading. <a href="#" onclick="syncAll()" style="color:var(--blu);">Retry</a></div>';
     }
   }
   document.getElementById('slbl').textContent='Synced just now';
+}
+
+function parseThread(thread){
+  if(!thread||!thread.messages||!thread.messages.length) return null;
+  const msgs=thread.messages.map(parseMsg).filter(Boolean);
+  if(!msgs.length) return null;
+  const last=msgs[msgs.length-1];
+  const hasUnread=msgs.some(m=>m.unread);
+  return {
+    id:thread.id,
+    threadId:thread.id,
+    from:last.from,
+    fromEmail:last.fromEmail,
+    subject:last.subject,
+    snippet:last.snippet,
+    body:last.body,
+    date:last.date,
+    timeStr:last.timeStr,
+    unread:hasUnread,
+    msgCount:msgs.length,
+    messages:msgs   // full thread
+  };
 }
 
 function parseMsg(md){
@@ -566,13 +588,22 @@ function parseMsg(md){
   const date=get('Date');
   const unread=(md.labelIds||[]).includes('UNREAD');
   const body=extractBody(md.payload);
+  // detect attachments
+  const hasAtt=hasAttachments(md.payload);
   const t=new Date(parseInt(md.internalDate));
   const now=new Date();
   let timeStr;
   if(t.toDateString()===now.toDateString()) timeStr=t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
   else if(now-t<7*86400000) timeStr=t.toLocaleDateString([],{weekday:'short'});
   else timeStr=t.toLocaleDateString([],{month:'short',day:'numeric'});
-  return{id:md.id,threadId:md.threadId,from:fromName,fromEmail,subject:subj,snippet:md.snippet||'',body,date,timeStr,unread,labelIds:md.labelIds||[]};
+  return{id:md.id,threadId:md.threadId,from:fromName,fromEmail,subject:subj,snippet:md.snippet||'',body,date,timeStr,unread,labelIds:md.labelIds||[],hasAtt,_raw:md};
+}
+
+function hasAttachments(payload){
+  if(!payload) return false;
+  if(payload.filename&&payload.filename.length>0) return true;
+  if(payload.parts) return payload.parts.some(hasAttachments);
+  return false;
 }
 
 function extractBody(payload){
@@ -633,9 +664,12 @@ function renderInboxList(msgs){
     const div=document.createElement('div');
     div.className='irow'+(m.unread?'':' read');
     div.id='irow-'+m.id;
+    const countBadge=m.msgCount>1?`<span style="font-size:10px;background:#E8E6E0;color:#555;padding:1px 5px;border-radius:4px;margin-left:4px;">${m.msgCount}</span>`:'';
+    const attIcon=m.hasAtt||m.messages&&m.messages.some(msg=>msg.hasAtt)?`<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="#999" stroke-width="1.6" style="margin-left:4px;flex-shrink:0;"><path d="M14 10.5a4 4 0 0 1-8 0V4a2.5 2.5 0 0 1 5 0v6a1 1 0 0 1-2 0V5"/></svg>`:'';
+
     div.innerHTML=`
       ${m.unread?'<div class="unread-dot"></div>':''}
-      <div class="ir-top"><div class="ir-from">${x(m.from)}</div><div class="ir-time">${x(m.timeStr)}</div></div>
+      <div class="ir-top"><div class="ir-from" style="display:flex;align-items:center;">${x(m.from)}${countBadge}${attIcon}</div><div class="ir-time">${x(m.timeStr)}</div></div>
       <div class="ir-subj">${x(m.subject)}</div>
       <div class="ir-prev">${x(m.snippet)}</div>`;
     div.onclick=()=>openInboxMsg(m);
@@ -654,30 +688,122 @@ function updateInboxBadge(){
   else b.style.display='none';
 }
 
-function openInboxMsg(m){
-  selectedInboxMsg=m;
+function initials(name){
+  return (name||'?').split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'?';
+}
+function avatarColor(name){
+  const colors=['#1D5FAD','#237A42','#A36210','#C13333','#7B4EA6','#1A7A8A'];
+  let h=0;for(const ch of name||'')h=(h*31+ch.charCodeAt(0))&0xffff;
+  return colors[h%colors.length];
+}
+
+function openInboxMsg(thread){
+  selectedInboxMsg=thread;
   document.querySelectorAll('.irow').forEach(r=>r.classList.remove('sel'));
-  const row=document.getElementById('irow-'+m.id);
+  const row=document.getElementById('irow-'+thread.id);
   if(row) row.classList.add('sel');
 
   document.getElementById('pane-empty').style.display='none';
   const pc=document.getElementById('pane-content');
   pc.style.display='flex';
 
-  document.getElementById('pane-subj').textContent=m.subject;
-  document.getElementById('pane-from').textContent=m.from;
-  document.getElementById('pane-email').textContent=m.fromEmail;
-  document.getElementById('pane-date').textContent=m.date;
-  renderBody(document.getElementById('pane-body'), m.body, m.snippet);
+  // Subject
+  document.getElementById('pane-subj').textContent=thread.subject;
+  document.getElementById('pane-from').textContent='';
+  document.getElementById('pane-email').textContent='';
+  document.getElementById('pane-date').textContent='';
 
-  // mark as read
-  if(m.unread){
-    m.unread=false;
-    const row=document.getElementById('irow-'+m.id);
-    if(row){row.classList.add('read');row.querySelector('.unread-dot')&&row.querySelector('.unread-dot').remove();}
-    markRead(m.id);
+  // Render thread messages
+  const body=document.getElementById('pane-body');
+  body.innerHTML='';
+  const msgs=thread.messages||[thread];
+  msgs.forEach((msg,idx)=>{
+    const isLast=idx===msgs.length-1;
+    const collapsed=!isLast; // all collapsed except last
+    const msgEl=document.createElement('div');
+    msgEl.style.cssText='border:1px solid #E2E0DA;border-radius:12px;margin-bottom:10px;overflow:hidden;background:#fff;';
+
+    const col=avatarColor(msg.from);
+    const ini=initials(msg.from);
+    // attachments
+    const atts=getAttachments(msg);
+    const attHTML=atts.length?`<div style="padding:10px 16px 14px;display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid #E2E0DA;">${atts.map(a=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #E2E0DA;border-radius:8px;font-size:11px;color:#555;">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><polyline points="9,2 9,6 13,6"/></svg>
+      ${x(a.name)}</div>`).join('')}</div>`:'';
+
+    msgEl.innerHTML=`
+      <div class="msg-header" style="padding:14px 16px;display:flex;align-items:flex-start;gap:10px;cursor:${collapsed?'pointer':'default'};" onclick="toggleMsg(this,${collapsed})">
+        <div style="width:36px;height:36px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;">${ini}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;">
+            <span style="font-size:13px;font-weight:600;color:#111110;">${x(msg.from)}</span>
+            <span style="font-size:11px;color:#999790;font-family:monospace;white-space:nowrap;">${x(msg.timeStr||msg.date||'')}</span>
+          </div>
+          ${collapsed?`<div style="font-size:12px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${x(msg.snippet||'')}</div>`:`<div style="font-size:12px;color:#888;margin-top:1px;">to me</div>`}
+        </div>
+        ${isLast?`<div style="display:flex;gap:6px;flex-shrink:0;">
+          <button onclick="event.stopPropagation();replyEmail()" style="height:28px;padding:0 10px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↩ Reply</button>
+          <button onclick="event.stopPropagation();forwardEmail()" style="height:28px;padding:0 10px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↪ Forward</button>
+        </div>`:''}
+      </div>
+      <div class="msg-body" style="display:${collapsed?'none':'block'};padding:0 16px 4px 62px;">
+        <div class="msg-body-content"></div>
+        ${attHTML}
+      </div>`;
+
+    // render body into the content div
+    if(!collapsed){
+      const bc=msgEl.querySelector('.msg-body-content');
+      renderBody(bc, msg.body, msg.snippet);
+    }
+    body.appendChild(msgEl);
+  });
+
+  // mark unread msgs as read
+  if(thread.unread){
+    thread.unread=false;
+    if(row){row.classList.add('read');const dot=row.querySelector('.unread-dot');if(dot)dot.remove();}
+    thread.messages&&thread.messages.filter(m=>m.unread).forEach(m=>markRead(m.id));
     updateInboxBadge();
   }
+}
+
+function toggleMsg(header, wasCollapsed){
+  const msgEl=header.parentElement;
+  const bodyEl=msgEl.querySelector('.msg-body');
+  const bodyContent=msgEl.querySelector('.msg-body-content');
+  if(wasCollapsed){
+    bodyEl.style.display='block';
+    header.style.cursor='default';
+    // lazy render body
+    if(!bodyContent.hasChildNodes()){
+      // find msg data from thread
+      const iframe=bodyContent.querySelector('iframe');
+      if(!iframe && selectedInboxMsg){
+        const allMsgs=selectedInboxMsg.messages||[];
+        const from=header.querySelector('span').textContent;
+        const msg=allMsgs.find(m=>m.from===from)||allMsgs[0];
+        if(msg) renderBody(bodyContent, msg.body, msg.snippet);
+      }
+    }
+    header.setAttribute('onclick','toggleMsg(this,false)');
+  } else {
+    bodyEl.style.display='none';
+    header.style.cursor='pointer';
+    header.setAttribute('onclick','toggleMsg(this,true)');
+  }
+}
+
+function getAttachments(msg){
+  if(!msg||!msg._raw||!msg._raw.payload) return [];
+  const atts=[];
+  function walk(p){
+    if(!p) return;
+    if(p.filename&&p.filename.length>0&&p.body&&p.body.attachmentId) atts.push({name:p.filename,mimeType:p.mimeType||'',id:p.body.attachmentId});
+    if(p.parts) p.parts.forEach(walk);
+  }
+  walk(msg._raw.payload);
+  return atts;
 }
 
 async function markRead(id){
