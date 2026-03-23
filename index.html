@@ -609,10 +609,15 @@ function hasAttachments(payload){
 function b64decode(str){
   try{
     const bin=atob(str.replace(/-/g,'+').replace(/_/g,'/'));
-    // Use TextDecoder for proper UTF-8 support
     const bytes=new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-    return new TextDecoder('utf-8').decode(bytes);
+    // Try UTF-8 first, fall back to Windows-1252 (handles â€™ â€¢ Â etc)
+    try{
+      const decoded=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+      return decoded;
+    }catch(e){
+      return new TextDecoder('windows-1252').decode(bytes);
+    }
   }catch(e){
     try{return atob(str.replace(/-/g,'+').replace(/_/g,'/'));}catch(e2){return '';}
   }
@@ -648,36 +653,38 @@ function renderBody(el, bodyObj, snippet){
   const html=typeof bodyObj==='object'?bodyObj.html:'';
   const plain=typeof bodyObj==='object'?bodyObj.plain:(bodyObj||'');
   if(html){
-    // Use blob URL so images load (no sandbox restriction)
-    const style=`<style>
-      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.65;color:#111110;padding:4px 0 12px;margin:0;word-break:break-word;}
-      img{max-width:100%!important;height:auto!important;}
-      a{color:#1D5FAD;}
-      blockquote{border-left:3px solid #E2E0DA;margin:8px 0;padding:4px 12px;color:#666;}
-      ul,ol{padding-left:20px;margin:6px 0;}
-      li{margin:2px 0;}
-      p{margin:6px 0;}
-      *{box-sizing:border-box;max-width:100%;}
-      table{max-width:100%!important;}
-    </style>`;
-    const fullHtml='<!DOCTYPE html><html><head><meta charset="utf-8">'+style+'</head><body>'+html+'</body></html>';
+    const emailStyle='html,body{margin:0;padding:0;}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.65;color:#111110;padding:2px 0 16px;word-break:break-word;overflow-x:hidden;}img{max-width:100%!important;height:auto!important;display:inline-block;}a{color:#1D5FAD;text-decoration:underline;}blockquote{border-left:3px solid #E2E0DA;margin:8px 0;padding:4px 12px;color:#666;}ul,ol{padding-left:22px;margin:6px 0;}li{margin:3px 0;}p{margin:6px 0;}*{box-sizing:border-box;}table{max-width:100%!important;border-collapse:collapse;}';
+    const fullHtml='<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+emailStyle+'</style></head><body>'+html+'</body></html>';
     const blob=new Blob([fullHtml],{type:'text/html'});
     const url=URL.createObjectURL(blob);
     const iframe=document.createElement('iframe');
-    iframe.style.cssText='width:100%;border:none;min-height:100px;display:block;';
+    iframe.style.cssText='width:100%;border:none;min-height:40px;display:block;';
     iframe.onload=()=>{
       try{
-        const h=iframe.contentDocument.body.scrollHeight;
-        iframe.style.height=(h+24)+'px';
-        URL.revokeObjectURL(url);
+        // intercept link clicks — open in new tab
+        iframe.contentDocument.addEventListener('click',function(e){
+          const a=e.target.closest('a');
+          if(a&&a.href){e.preventDefault();window.open(a.href,'_blank');}
+        });
+        // auto-resize
+        const resize=()=>{
+          try{
+            const h=iframe.contentDocument.body.scrollHeight;
+            if(h>10) iframe.style.height=(h+20)+'px';
+          }catch(e){}
+        };
+        resize();
+        setTimeout(resize,400);
+        setTimeout(resize,1200);
       }catch(e){}
+      URL.revokeObjectURL(url);
     };
     iframe.src=url;
     el.appendChild(iframe);
   } else if(plain){
     const decoded=decodeEmailText(plain);
     const div=document.createElement('div');
-    div.style.cssText='font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+    div.style.cssText='font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:4px 0;';
     div.textContent=decoded;
     el.appendChild(div);
   } else if(snippet){
@@ -761,7 +768,7 @@ function openInboxMsg(thread){
     const col=avatarColor(msg.from);
     const ini=initials(msg.from);
     const atts=getAttachments(msg);
-    const attHTML=atts.length?`<div style="padding:8px 16px 12px 62px;display:flex;gap:6px;flex-wrap:wrap;">${atts.map(a=>`<div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border:1px solid #E2E0DA;border-radius:6px;font-size:11px;color:#555;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8H4V2z"/><polyline points="9,2 9,6 13,6"/></svg>${x(a.name)}</div>`).join('')}</div>`:'';
+    const attHTML=atts.length?`<div style="padding:8px 16px 12px 62px;display:flex;gap:6px;flex-wrap:wrap;">${atts.map(a=>`<div onclick="downloadAttachment('${a.msgId}','${a.id}','${a.name.replace(/'/g,'')}','${a.mimeType}')" style="display:flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid #E2E0DA;border-radius:6px;font-size:11px;color:#1D5FAD;cursor:pointer;background:#EFF5FD;" title="Click to download"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8H4V2z"/><polyline points="9,2 9,6 13,6"/></svg>${x(a.name)}</div>`).join('')}</div>`:'';
 
     const msgWrapper=document.createElement('div');
     // divider between messages
@@ -825,11 +832,30 @@ function getAttachments(msg){
   const atts=[];
   function walk(p){
     if(!p) return;
-    if(p.filename&&p.filename.length>0&&p.body&&p.body.attachmentId) atts.push({name:p.filename,mimeType:p.mimeType||'',id:p.body.attachmentId});
+    if(p.filename&&p.filename.length>0&&p.body&&p.body.attachmentId){
+      atts.push({name:p.filename,mimeType:p.mimeType||'',id:p.body.attachmentId,msgId:msg.id});
+    }
     if(p.parts) p.parts.forEach(walk);
   }
   walk(msg._raw.payload);
   return atts;
+}
+
+async function downloadAttachment(msgId, attId, filename, mimeType){
+  try{
+    const r=await gfetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/attachments/${attId}`);
+    const d=await r.json();
+    if(!d.data) return;
+    const bin=atob(d.data.replace(/-/g,'+').replace(/_/g,'/'));
+    const bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+    const blob=new Blob([bytes],{type:mimeType||'application/octet-stream'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=filename; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    showToast('Downloading '+filename);
+  }catch(e){showToast('Error downloading attachment');}
 }
 
 async function markRead(id){
