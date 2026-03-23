@@ -658,26 +658,31 @@ function renderBody(el, bodyObj, snippet){
     const blob=new Blob([fullHtml],{type:'text/html'});
     const url=URL.createObjectURL(blob);
     const iframe=document.createElement('iframe');
-    iframe.style.cssText='width:100%;border:none;min-height:40px;display:block;';
+    iframe.style.cssText='width:100%;border:none;display:block;';
     iframe.onload=()=>{
       try{
-        // intercept link clicks — open in new tab
+        // intercept link clicks
         iframe.contentDocument.addEventListener('click',function(e){
           const a=e.target.closest('a');
           if(a&&a.href){e.preventDefault();window.open(a.href,'_blank');}
         });
-        // auto-resize
+        // resize immediately and after images load
         const resize=()=>{
           try{
-            const h=iframe.contentDocument.body.scrollHeight;
-            if(h>10) iframe.style.height=(h+20)+'px';
+            const h=iframe.contentDocument.documentElement.scrollHeight;
+            if(h>20) iframe.style.height=h+'px';
           }catch(e){}
         };
         resize();
-        setTimeout(resize,400);
-        setTimeout(resize,1200);
+        // also resize when images finish loading inside iframe
+        const imgs=iframe.contentDocument.querySelectorAll('img');
+        imgs.forEach(img=>{ img.onload=resize; });
+        setTimeout(resize,300);
+        setTimeout(resize,800);
+        setTimeout(resize,2000);
       }catch(e){}
-      URL.revokeObjectURL(url);
+      // revoke AFTER resize attempts
+      setTimeout(()=>URL.revokeObjectURL(url),3000);
     };
     iframe.src=url;
     el.appendChild(iframe);
@@ -768,7 +773,8 @@ function openInboxMsg(thread){
     const col=avatarColor(msg.from);
     const ini=initials(msg.from);
     const atts=getAttachments(msg);
-    const attHTML=atts.length?`<div style="padding:8px 16px 12px 62px;display:flex;gap:6px;flex-wrap:wrap;">${atts.map(a=>`<div onclick="downloadAttachment('${a.msgId}','${a.id}','${a.name.replace(/'/g,'')}','${a.mimeType}')" style="display:flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid #E2E0DA;border-radius:6px;font-size:11px;color:#1D5FAD;cursor:pointer;background:#EFF5FD;" title="Click to download"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8H4V2z"/><polyline points="9,2 9,6 13,6"/></svg>${x(a.name)}</div>`).join('')}</div>`:'';
+    // store attachments by index for safe access
+const attHTML=''; // rendered below via DOM
 
     const msgWrapper=document.createElement('div');
     // divider between messages
@@ -793,7 +799,15 @@ function openInboxMsg(thread){
     bodyDiv.appendChild(bodyContent);
     if(atts.length){
       const attDiv=document.createElement('div');
-      attDiv.innerHTML=attHTML;
+      attDiv.style.cssText='padding:8px 0 12px;display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid #F0EDE8;margin-top:8px;';
+      atts.forEach(att=>{
+        const btn=document.createElement('div');
+        btn.style.cssText='display:flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid #B8D4F8;border-radius:6px;font-size:11px;color:#1D5FAD;cursor:pointer;background:#EFF5FD;';
+        btn.title='Click to download';
+        btn.innerHTML='<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8H4V2z"/><polyline points="9,2 9,6 13,6"/></svg> '+x(att.name);
+        btn.onclick=()=>downloadAttachment(att.msgId, att.id, att.name, att.mimeType);
+        attDiv.appendChild(btn);
+      });
       bodyDiv.appendChild(attDiv);
     }
 
@@ -842,20 +856,28 @@ function getAttachments(msg){
 }
 
 async function downloadAttachment(msgId, attId, filename, mimeType){
+  showToast('Downloading '+filename+'…');
   try{
-    const r=await gfetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}/attachments/${attId}`);
+    const r=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+msgId+'/attachments/'+attId);
+    if(!r.ok){ showToast('Error: could not fetch attachment'); return; }
     const d=await r.json();
-    if(!d.data) return;
+    if(!d.data){ showToast('No data in attachment'); return; }
     const bin=atob(d.data.replace(/-/g,'+').replace(/_/g,'/'));
     const bytes=new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
     const blob=new Blob([bytes],{type:mimeType||'application/octet-stream'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');
-    a.href=url; a.download=filename; a.click();
-    setTimeout(()=>URL.revokeObjectURL(url),3000);
-    showToast('Downloading '+filename);
-  }catch(e){showToast('Error downloading attachment');}
+    a.href=url; a.download=filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),5000);
+    showToast(filename+' downloaded!');
+  }catch(e){
+    console.error('download error',e);
+    showToast('Error downloading — try again');
+  }
 }
 
 async function markRead(id){
