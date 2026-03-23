@@ -606,12 +606,24 @@ function hasAttachments(payload){
   return false;
 }
 
+function b64decode(str){
+  try{
+    const bin=atob(str.replace(/-/g,'+').replace(/_/g,'/'));
+    // Use TextDecoder for proper UTF-8 support
+    const bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  }catch(e){
+    try{return atob(str.replace(/-/g,'+').replace(/_/g,'/'));}catch(e2){return '';}
+  }
+}
+
 function extractBody(payload){
   if(!payload) return {html:'',plain:''};
   let html='',plain='';
   function walk(p){
     if(!p) return;
-    const data=p.body&&p.body.data?atob(p.body.data.replace(/-/g,'+').replace(/_/g,'/')):'';
+    const data=p.body&&p.body.data?b64decode(p.body.data):'';
     if(p.mimeType==='text/html'&&data&&!html) html=data;
     if(p.mimeType==='text/plain'&&data&&!plain) plain=data;
     if(p.parts) p.parts.forEach(walk);
@@ -620,31 +632,58 @@ function extractBody(payload){
   return {html,plain};
 }
 
+function decodeEmailText(str){
+  // Fix common encoding issues from email clients
+  try{ str=decodeURIComponent(escape(str)); }catch(e){}
+  str=str.replace(/â€™/g,"'").replace(/â€œ/g,'"').replace(/â€/g,'"')
+         .replace(/â€¢/g,'•').replace(/â€"/g,'—').replace(/â€"/g,'–')
+         .replace(/Â /g,' ').replace(/Â/g,'').replace(/â/g,'')
+         .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+         .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ');
+  return str;
+}
+
 function renderBody(el, bodyObj, snippet){
   el.innerHTML='';
   const html=typeof bodyObj==='object'?bodyObj.html:'';
   const plain=typeof bodyObj==='object'?bodyObj.plain:(bodyObj||'');
   if(html){
+    // Use blob URL so images load (no sandbox restriction)
+    const style=`<style>
+      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.65;color:#111110;padding:4px 0 12px;margin:0;word-break:break-word;}
+      img{max-width:100%!important;height:auto!important;}
+      a{color:#1D5FAD;}
+      blockquote{border-left:3px solid #E2E0DA;margin:8px 0;padding:4px 12px;color:#666;}
+      ul,ol{padding-left:20px;margin:6px 0;}
+      li{margin:2px 0;}
+      p{margin:6px 0;}
+      *{box-sizing:border-box;max-width:100%;}
+      table{max-width:100%!important;}
+    </style>`;
+    const fullHtml='<!DOCTYPE html><html><head><meta charset="utf-8">'+style+'</head><body>'+html+'</body></html>';
+    const blob=new Blob([fullHtml],{type:'text/html'});
+    const url=URL.createObjectURL(blob);
     const iframe=document.createElement('iframe');
-    iframe.style.cssText='width:100%;border:none;min-height:200px;display:block;';
-    iframe.sandbox='allow-same-origin';
-    el.style.overflow='auto';
-    el.style.flex='1';
-    el.appendChild(iframe);
-    iframe.addEventListener('load',()=>{
+    iframe.style.cssText='width:100%;border:none;min-height:100px;display:block;';
+    iframe.onload=()=>{
       try{
-        const doc=iframe.contentDocument;
-        doc.open();
-        doc.write('<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;font-size:13px;line-height:1.65;color:#111110;padding:8px 0;margin:0;word-break:break-word;}img{max-width:100%;height:auto;}a{color:#1D5FAD;}blockquote{border-left:3px solid #E2E0DA;margin:8px 0;padding:4px 12px;color:#555450;}*{box-sizing:border-box;}</style></head><body>'+html+'</body></html>');
-        doc.close();
-        setTimeout(()=>{if(iframe.contentDocument&&iframe.contentDocument.body){iframe.style.height=iframe.contentDocument.body.scrollHeight+32+'px';}},300);
+        const h=iframe.contentDocument.body.scrollHeight;
+        iframe.style.height=(h+24)+'px';
+        URL.revokeObjectURL(url);
       }catch(e){}
-    });
-    iframe.src='about:blank';
-  } else {
+    };
+    iframe.src=url;
+    el.appendChild(iframe);
+  } else if(plain){
+    const decoded=decodeEmailText(plain);
     const div=document.createElement('div');
-    div.style.cssText='font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;';
-    div.textContent=plain||snippet||'(no content)';
+    div.style.cssText='font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;font-family:-apple-system,BlinkMacSystemFont,sans-serif;';
+    div.textContent=decoded;
+    el.appendChild(div);
+  } else if(snippet){
+    const div=document.createElement('div');
+    div.style.cssText='font-size:13px;line-height:1.75;color:#555;font-style:italic;';
+    div.textContent=snippet;
     el.appendChild(div);
   }
 }
@@ -702,64 +741,78 @@ function openInboxMsg(thread){
   document.querySelectorAll('.irow').forEach(r=>r.classList.remove('sel'));
   const row=document.getElementById('irow-'+thread.id);
   if(row) row.classList.add('sel');
-
   document.getElementById('pane-empty').style.display='none';
   const pc=document.getElementById('pane-content');
   pc.style.display='flex';
-
-  // Subject
   document.getElementById('pane-subj').textContent=thread.subject;
-  document.getElementById('pane-from').textContent='';
-  document.getElementById('pane-email').textContent='';
-  document.getElementById('pane-date').textContent='';
 
-  // Render thread messages
+  // Render ALL messages inside ONE single box
   const body=document.getElementById('pane-body');
   body.innerHTML='';
   const msgs=thread.messages||[thread];
+
+  // Single container box for entire thread
+  const threadBox=document.createElement('div');
+  threadBox.style.cssText='border:1px solid #E2E0DA;border-radius:12px;overflow:hidden;background:#fff;';
+
   msgs.forEach((msg,idx)=>{
     const isLast=idx===msgs.length-1;
-    const collapsed=!isLast; // all collapsed except last
-    const msgEl=document.createElement('div');
-    msgEl.style.cssText='border:1px solid #E2E0DA;border-radius:12px;margin-bottom:10px;overflow:hidden;background:#fff;';
-
+    const collapsed=!isLast;
     const col=avatarColor(msg.from);
     const ini=initials(msg.from);
-    // attachments
     const atts=getAttachments(msg);
-    const attHTML=atts.length?`<div style="padding:10px 16px 14px;display:flex;gap:8px;flex-wrap:wrap;border-top:1px solid #E2E0DA;">${atts.map(a=>`<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #E2E0DA;border-radius:8px;font-size:11px;color:#555;">
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><polyline points="9,2 9,6 13,6"/></svg>
-      ${x(a.name)}</div>`).join('')}</div>`:'';
+    const attHTML=atts.length?`<div style="padding:8px 16px 12px 62px;display:flex;gap:6px;flex-wrap:wrap;">${atts.map(a=>`<div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border:1px solid #E2E0DA;border-radius:6px;font-size:11px;color:#555;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8H4V2z"/><polyline points="9,2 9,6 13,6"/></svg>${x(a.name)}</div>`).join('')}</div>`:'';
 
-    msgEl.innerHTML=`
-      <div class="msg-header" style="padding:14px 16px;display:flex;align-items:flex-start;gap:10px;cursor:${collapsed?'pointer':'default'};" onclick="toggleMsg(this,${collapsed})">
-        <div style="width:36px;height:36px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;">${ini}</div>
-        <div style="flex:1;min-width:0;">
-          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;">
-            <span style="font-size:13px;font-weight:600;color:#111110;">${x(msg.from)}</span>
-            <span style="font-size:11px;color:#999790;font-family:monospace;white-space:nowrap;">${x(msg.timeStr||msg.date||'')}</span>
-          </div>
-          ${collapsed?`<div style="font-size:12px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${x(msg.snippet||'')}</div>`:`<div style="font-size:12px;color:#888;margin-top:1px;">to me</div>`}
+    const msgWrapper=document.createElement('div');
+    // divider between messages
+    if(idx>0) msgWrapper.style.borderTop='1px solid #F0EDE8';
+
+    const headerDiv=document.createElement('div');
+    headerDiv.style.cssText='padding:12px 16px;display:flex;align-items:flex-start;gap:10px;cursor:'+(collapsed?'pointer':'default')+';';
+    headerDiv.innerHTML=`
+      <div style="width:36px;height:36px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;margin-top:2px;">${ini}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:13px;font-weight:600;color:#111110;">${x(msg.from)}</span>
+          <span style="font-size:11px;color:#999;font-family:monospace;">${x(msg.timeStr||'')}</span>
         </div>
-        ${isLast?`<div style="display:flex;gap:6px;flex-shrink:0;">
-          <button onclick="event.stopPropagation();replyEmail()" style="height:28px;padding:0 10px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↩ Reply</button>
-          <button onclick="event.stopPropagation();forwardEmail()" style="height:28px;padding:0 10px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↪ Forward</button>
-        </div>`:''}
+        ${collapsed?`<div style="font-size:12px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px;">${x(msg.snippet||'')}</div>`:`<div style="font-size:12px;color:#999;">to me</div>`}
       </div>
-      <div class="msg-body" style="display:${collapsed?'none':'block'};padding:0 16px 4px 62px;">
-        <div class="msg-body-content"></div>
-        ${attHTML}
-      </div>`;
+      ${isLast?`<div style="display:flex;gap:5px;flex-shrink:0;"><button onclick="event.stopPropagation();replyEmail()" style="height:26px;padding:0 9px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↩ Reply</button><button onclick="event.stopPropagation();forwardEmail()" style="height:26px;padding:0 9px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↪ Fwd</button></div>`:''}`;
 
-    // render body into the content div
-    if(!collapsed){
-      const bc=msgEl.querySelector('.msg-body-content');
-      renderBody(bc, msg.body, msg.snippet);
+    const bodyDiv=document.createElement('div');
+    bodyDiv.style.cssText='display:'+(collapsed?'none':'block')+';padding:0 16px 12px 62px;';
+    const bodyContent=document.createElement('div');
+    bodyDiv.appendChild(bodyContent);
+    if(atts.length){
+      const attDiv=document.createElement('div');
+      attDiv.innerHTML=attHTML;
+      bodyDiv.appendChild(attDiv);
     }
-    body.appendChild(msgEl);
+
+    if(!collapsed){
+      renderBody(bodyContent, msg.body, msg.snippet);
+    }
+
+    // toggle on click
+    headerDiv.addEventListener('click', ()=>{
+      if(bodyDiv.style.display==='none'){
+        bodyDiv.style.display='block';
+        headerDiv.style.cursor='default';
+        if(!bodyContent.hasChildNodes()) renderBody(bodyContent, msg.body, msg.snippet);
+      } else if(!isLast) {
+        bodyDiv.style.display='none';
+        headerDiv.style.cursor='pointer';
+      }
+    });
+
+    msgWrapper.appendChild(headerDiv);
+    msgWrapper.appendChild(bodyDiv);
+    threadBox.appendChild(msgWrapper);
   });
 
-  // mark unread msgs as read
+  body.appendChild(threadBox);
+
   if(thread.unread){
     thread.unread=false;
     if(row){row.classList.add('read');const dot=row.querySelector('.unread-dot');if(dot)dot.remove();}
@@ -767,33 +820,6 @@ function openInboxMsg(thread){
     updateInboxBadge();
   }
 }
-
-function toggleMsg(header, wasCollapsed){
-  const msgEl=header.parentElement;
-  const bodyEl=msgEl.querySelector('.msg-body');
-  const bodyContent=msgEl.querySelector('.msg-body-content');
-  if(wasCollapsed){
-    bodyEl.style.display='block';
-    header.style.cursor='default';
-    // lazy render body
-    if(!bodyContent.hasChildNodes()){
-      // find msg data from thread
-      const iframe=bodyContent.querySelector('iframe');
-      if(!iframe && selectedInboxMsg){
-        const allMsgs=selectedInboxMsg.messages||[];
-        const from=header.querySelector('span').textContent;
-        const msg=allMsgs.find(m=>m.from===from)||allMsgs[0];
-        if(msg) renderBody(bodyContent, msg.body, msg.snippet);
-      }
-    }
-    header.setAttribute('onclick','toggleMsg(this,false)');
-  } else {
-    bodyEl.style.display='none';
-    header.style.cursor='pointer';
-    header.setAttribute('onclick','toggleMsg(this,true)');
-  }
-}
-
 function getAttachments(msg){
   if(!msg||!msg._raw||!msg._raw.payload) return [];
   const atts=[];
