@@ -611,12 +611,13 @@ function b64decode(str){
     const bin=atob(str.replace(/-/g,'+').replace(/_/g,'/'));
     const bytes=new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-    // Try UTF-8 first, fall back to Windows-1252 (handles â€™ â€¢ Â etc)
+    // Try strict UTF-8 first
     try{
-      const decoded=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
-      return decoded;
+      return new TextDecoder('utf-8',{fatal:true}).decode(bytes);
     }catch(e){
-      return new TextDecoder('windows-1252').decode(bytes);
+      // Fall back to windows-1252 which handles most Latin email encoding issues
+      try{ return new TextDecoder('windows-1252').decode(bytes); }
+      catch(e2){ return new TextDecoder('iso-8859-1').decode(bytes); }
     }
   }catch(e){
     try{return atob(str.replace(/-/g,'+').replace(/_/g,'/'));}catch(e2){return '';}
@@ -638,59 +639,132 @@ function extractBody(payload){
 }
 
 function decodeEmailText(str){
-  // Fix common encoding issues from email clients
-  try{ str=decodeURIComponent(escape(str)); }catch(e){}
-  str=str.replace(/â€™/g,"'").replace(/â€œ/g,'"').replace(/â€/g,'"')
-         .replace(/â€¢/g,'•').replace(/â€"/g,'—').replace(/â€"/g,'–')
-         .replace(/Â /g,' ').replace(/Â/g,'').replace(/â/g,'')
-         .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
-         .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ');
+  if(!str) return str;
+  // Fix Windows-1252 bytes misinterpreted as UTF-8
+  str=str
+    .replace(/â€™/g,"'").replace(/â€˜/g,"'")
+    .replace(/â€œ/g,'"').replace(/â€/g,'"').replace(/â€/g,'"')
+    .replace(/â€¢/g,'•').replace(/â€"/g,'—').replace(/â€"/g,'–')
+    .replace(/â€¯/g,' ').replace(/â€‹/g,'').replace(/â€Ž/g,'')
+    .replace(/Â·/g,'·').replace(/Â°/g,'°').replace(/Â£/g,'£')
+    .replace(/Â©/g,'©').replace(/Â®/g,'®').replace(/Â½/g,'½')
+    .replace(/Â /g,' ').replace(/Â /g,' ').replace(/Â/g,'')
+    .replace(/ã€/g,'').replace(/â/g,'')
+    .replace(/â/g,"'").replace(/â/g,'"').replace(/â/g,'"')
+    .replace(/â¢/g,'•').replace(/â/g,'—').replace(/â/g,'–')
+    .replace(/Â /g,' ');
   return str;
 }
 
-function renderBody(el, bodyObj, snippet){
+async function fetchCidImages(msgRaw, html){
+  if(!msgRaw||!msgRaw.payload) return html;
+  const cids={};
+  function walkParts(p){
+    if(!p) return;
+    if(p.headers){
+      const cidH=(p.headers.find(h=>h.name.toLowerCase()==='content-id')||{}).value||'';
+      const cid=cidH.replace(/[<>]/g,'').trim();
+      if(cid&&p.body&&p.body.data){
+        try{
+          const bin=atob(p.body.data.replace(/-/g,'+').replace(/_/g,'/'));
+          const bytes=new Uint8Array(bin.length);
+          for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+          const blob=new Blob([bytes],{type:p.mimeType||'image/png'});
+          cids[cid]=URL.createObjectURL(blob);
+        }catch(e){}
+      }
+    }
+    if(p.parts) p.parts.forEach(walkParts);
+  }
+  walkParts(msgRaw.payload);
+  let result=html;
+  for(const[cid,url] of Object.entries(cids)){
+    result=result.split('cid:'+cid).join(url);
+  }
+  return result;
+}
+
+function openPreview(msgId, attId, filename, mimeType){
+  const isImage=mimeType.startsWith('image/');
+  const isPdf=mimeType==='application/pdf'||filename.endsWith('.pdf');
+  const modal=document.getElementById('preview-modal');
+  const content=document.getElementById('preview-content');
+  const title=document.getElementById('preview-title');
+  title.textContent=filename;
+  content.innerHTML='<div style="padding:40px;text-align:center;color:#999;font-size:13px;">Loading…</div>';
+  modal.style.display='flex';
+  gfetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+msgId+'/attachments/'+attId)
+    .then(r=>r.json()).then(d=>{
+      if(!d.data){content.innerHTML='<p style="padding:24px;color:#c13;">Could not load file.</p>';return;}
+      const bin=atob(d.data.replace(/-/g,'+').replace(/_/g,'/'));
+      const bytes=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+      const blob=new Blob([bytes],{type:mimeType||'application/octet-stream'});
+      const url=URL.createObjectURL(blob);
+      if(isImage){
+        content.innerHTML='';
+        const img=document.createElement('img');
+        img.src=url; img.style.cssText='max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:6px;';
+        content.appendChild(img);
+      } else if(isPdf){
+        content.innerHTML='';
+        const pdfFrame=document.createElement('iframe');
+        pdfFrame.src=url; pdfFrame.style.cssText='width:100%;height:70vh;border:none;';
+        content.appendChild(pdfFrame);
+      } else {
+        content.innerHTML='<p style="padding:24px;font-size:13px;color:#555;">Preview not available for this file type.</p>';
+      }
+      // store for download button
+      document.getElementById('preview-download-btn').onclick=()=>{
+        const a=document.createElement('a');
+        a.href=url; a.download=filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        showToast('Downloading '+filename);
+      };
+    }).catch(()=>{content.innerHTML='<p style="padding:24px;color:#c13;">Error loading file.</p>';});
+}
+
+function renderBody(el, bodyObj, snippet, msgRaw){
   el.innerHTML='';
   const html=typeof bodyObj==='object'?bodyObj.html:'';
   const plain=typeof bodyObj==='object'?bodyObj.plain:(bodyObj||'');
   if(html){
-    const emailStyle='html,body{margin:0;padding:0;}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.65;color:#111110;padding:2px 0 16px;word-break:break-word;overflow-x:hidden;}img{max-width:100%!important;height:auto!important;display:inline-block;}a{color:#1D5FAD;text-decoration:underline;}blockquote{border-left:3px solid #E2E0DA;margin:8px 0;padding:4px 12px;color:#666;}ul,ol{padding-left:22px;margin:6px 0;}li{margin:3px 0;}p{margin:6px 0;}*{box-sizing:border-box;}table{max-width:100%!important;border-collapse:collapse;}';
-    const fullHtml='<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+emailStyle+'</style></head><body>'+html+'</body></html>';
-    const blob=new Blob([fullHtml],{type:'text/html'});
-    const url=URL.createObjectURL(blob);
-    const iframe=document.createElement('iframe');
-    iframe.style.cssText='width:100%;border:none;display:block;';
-    iframe.onload=()=>{
-      try{
-        // intercept link clicks
-        iframe.contentDocument.addEventListener('click',function(e){
-          const a=e.target.closest('a');
-          if(a&&a.href){e.preventDefault();window.open(a.href,'_blank');}
-        });
-        // resize immediately and after images load
-        const resize=()=>{
-          try{
-            const h=iframe.contentDocument.documentElement.scrollHeight;
-            if(h>20) iframe.style.height=h+'px';
-          }catch(e){}
-        };
-        resize();
-        // also resize when images finish loading inside iframe
-        const imgs=iframe.contentDocument.querySelectorAll('img');
-        imgs.forEach(img=>{ img.onload=resize; });
-        setTimeout(resize,300);
-        setTimeout(resize,800);
-        setTimeout(resize,2000);
-      }catch(e){}
-      // revoke AFTER resize attempts
-      setTimeout(()=>URL.revokeObjectURL(url),3000);
+    const emailStyle='html,body{margin:0;padding:0;}body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;font-size:13.5px;line-height:1.65;color:#111110;padding:0 0 8px;word-break:break-word;overflow-x:hidden;}img{max-width:100%!important;height:auto!important;}a{color:#1D5FAD;text-decoration:underline;}blockquote{border-left:3px solid #E2E0DA;margin:8px 0;padding:4px 12px;color:#666;}ul,ol{padding-left:22px;margin:6px 0;}li{margin:3px 0;}p{margin:5px 0;}*{box-sizing:border-box;}table{max-width:100%!important;border-collapse:collapse;}';
+    const build=(resolvedHtml)=>{
+      // Fix encoding artifacts in the HTML body text nodes
+      resolvedHtml=decodeEmailText(resolvedHtml);
+      const full='<!DOCTYPE html><html><head><meta charset="utf-8"><style>'+emailStyle+'</style></head><body>'+resolvedHtml+'</body></html>';
+      const blob=new Blob([full],{type:'text/html'});
+      const url=URL.createObjectURL(blob);
+      const iframe=document.createElement('iframe');
+      iframe.style.cssText='width:100%;border:none;display:block;';
+      iframe.onload=()=>{
+        try{
+          iframe.contentDocument.addEventListener('click',function(e){
+            const a=e.target.closest('a');
+            if(a&&a.href){e.preventDefault();window.open(a.href,'_blank');}
+          });
+          const resize=()=>{
+            try{
+              const h=iframe.contentDocument.documentElement.scrollHeight;
+              if(h>10) iframe.style.height=h+'px';
+            }catch(e){}
+          };
+          resize();
+          iframe.contentDocument.querySelectorAll('img').forEach(img=>{img.onload=resize;img.onerror=resize;});
+          setTimeout(resize,200); setTimeout(resize,600); setTimeout(resize,1500);
+        }catch(e){}
+        setTimeout(()=>URL.revokeObjectURL(url),5000);
+      };
+      iframe.src=url;
+      el.appendChild(iframe);
     };
-    iframe.src=url;
-    el.appendChild(iframe);
+    if(msgRaw) fetchCidImages(msgRaw,html).then(build);
+    else build(html);
   } else if(plain){
-    const decoded=decodeEmailText(plain);
     const div=document.createElement('div');
-    div.style.cssText='font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:4px 0;';
-    div.textContent=decoded;
+    div.style.cssText='font-size:13px;line-height:1.75;white-space:pre-wrap;word-break:break-word;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:2px 0;';
+    div.textContent=decodeEmailText(plain);
     el.appendChild(div);
   } else if(snippet){
     const div=document.createElement('div');
@@ -699,6 +773,7 @@ function renderBody(el, bodyObj, snippet){
     el.appendChild(div);
   }
 }
+
 
 async function gfetch(url,opts={}){
   return fetch(url,{...opts,headers:{Authorization:'Bearer '+gmailToken,...(opts.headers||{})}});
@@ -781,7 +856,7 @@ const attHTML=''; // rendered below via DOM
     if(idx>0) msgWrapper.style.borderTop='1px solid #F0EDE8';
 
     const headerDiv=document.createElement('div');
-    headerDiv.style.cssText='padding:12px 16px;display:flex;align-items:flex-start;gap:10px;cursor:'+(collapsed?'pointer':'default')+';';
+    headerDiv.style.cssText='padding:10px 16px 8px;display:flex;align-items:flex-start;gap:10px;cursor:'+(collapsed?'pointer':'default')+';';
     headerDiv.innerHTML=`
       <div style="width:36px;height:36px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0;margin-top:2px;">${ini}</div>
       <div style="flex:1;min-width:0;">
@@ -789,13 +864,14 @@ const attHTML=''; // rendered below via DOM
           <span style="font-size:13px;font-weight:600;color:#111110;">${x(msg.from)}</span>
           <span style="font-size:11px;color:#999;font-family:monospace;">${x(msg.timeStr||'')}</span>
         </div>
-        ${collapsed?`<div style="font-size:12px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px;">${x(msg.snippet||'')}</div>`:`<div style="font-size:12px;color:#999;">to me</div>`}
+        ${collapsed?`<div style="font-size:12px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:400px;">${x(msg.snippet||'')}</div>`:`<div style="font-size:11px;color:#bbb;margin-top:1px;">to me</div>`}
       </div>
       ${isLast?`<div style="display:flex;gap:5px;flex-shrink:0;"><button onclick="event.stopPropagation();replyEmail()" style="height:26px;padding:0 9px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↩ Reply</button><button onclick="event.stopPropagation();forwardEmail()" style="height:26px;padding:0 9px;border:1px solid #E2E0DA;border-radius:6px;background:#fff;font-size:11px;cursor:pointer;color:#555;">↪ Fwd</button></div>`:''}`;
 
     const bodyDiv=document.createElement('div');
-    bodyDiv.style.cssText='display:'+(collapsed?'none':'block')+';padding:0 16px 12px 62px;';
+    bodyDiv.style.cssText='display:'+(collapsed?'none':'block')+';padding:4px 16px 12px 62px;border-top:1px solid #F5F3EE;';
     const bodyContent=document.createElement('div');
+    bodyContent.style.cssText='min-height:20px;';
     bodyDiv.appendChild(bodyContent);
     if(atts.length){
       const attDiv=document.createElement('div');
@@ -805,14 +881,14 @@ const attHTML=''; // rendered below via DOM
         btn.style.cssText='display:flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid #B8D4F8;border-radius:6px;font-size:11px;color:#1D5FAD;cursor:pointer;background:#EFF5FD;';
         btn.title='Click to download';
         btn.innerHTML='<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2h6l4 4v8H4V2z"/><polyline points="9,2 9,6 13,6"/></svg> '+x(att.name);
-        btn.onclick=()=>downloadAttachment(att.msgId, att.id, att.name, att.mimeType);
+        btn.onclick=()=>openPreview(att.msgId, att.id, att.name, att.mimeType);
         attDiv.appendChild(btn);
       });
       bodyDiv.appendChild(attDiv);
     }
 
     if(!collapsed){
-      renderBody(bodyContent, msg.body, msg.snippet);
+      renderBody(bodyContent, msg.body, msg.snippet, msg._raw);
     }
 
     // toggle on click
@@ -820,7 +896,7 @@ const attHTML=''; // rendered below via DOM
       if(bodyDiv.style.display==='none'){
         bodyDiv.style.display='block';
         headerDiv.style.cursor='default';
-        if(!bodyContent.hasChildNodes()) renderBody(bodyContent, msg.body, msg.snippet);
+        if(!bodyContent.hasChildNodes()) renderBody(bodyContent, msg.body, msg.snippet, msg._raw);
       } else if(!isLast) {
         bodyDiv.style.display='none';
         headerDiv.style.cursor='pointer';
@@ -1093,7 +1169,7 @@ function openDP(id){
   document.getElementById('dp-subj').textContent=e.subject;
   document.getElementById('dp-from').textContent=e.from+(e.fromEmail?' <'+e.fromEmail+'>':'');
   document.getElementById('dp-date').textContent=e.date||e.time;
-  renderBody(document.getElementById('dp-body'), e.body, e.preview);
+  renderBody(document.getElementById('dp-body'), e.body, e.preview, e._raw||null);
   document.getElementById('dp-note').value=e.note||'';
   updDoneBtn(e);
   document.getElementById('dbg').classList.add('open');
@@ -1193,5 +1269,19 @@ function showToast(msg){
   clearTimeout(t._t);t._t=setTimeout(()=>{t.style.opacity='0';},2500);
 }
 </script>
+
+<!-- PREVIEW MODAL -->
+<div id="preview-modal" style="display:none;position:fixed;inset:0;background:rgba(17,17,16,.6);z-index:300;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:#fff;border-radius:14px;width:100%;max-width:860px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.2);overflow:hidden;">
+    <div style="padding:14px 18px;border-bottom:1px solid #E2E0DA;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <span id="preview-title" style="font-size:14px;font-weight:600;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%;"></span>
+      <div style="display:flex;gap:8px;">
+        <button id="preview-download-btn" style="height:30px;padding:0 12px;border:1px solid #E2E0DA;border-radius:7px;background:#fff;font-size:12px;cursor:pointer;color:#1D5FAD;">⬇ Download</button>
+        <button onclick="document.getElementById('preview-modal').style.display='none'" style="height:30px;padding:0 12px;border:1px solid #E2E0DA;border-radius:7px;background:#fff;font-size:12px;cursor:pointer;color:#555;">✕ Close</button>
+      </div>
+    </div>
+    <div id="preview-content" style="flex:1;overflow:auto;padding:16px;background:#F5F4F0;"></div>
+  </div>
+</div>
 </body>
 </html>
