@@ -393,7 +393,7 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
           <input class="inbox-search" id="gmail-search" placeholder="Search all Gmail history…" style="flex:1;" onkeydown="if(event.key==='Enter')searchGmail()">
           <button class="btn btn-k" onclick="searchGmail()" style="height:30px;padding:0 10px;font-size:12px;">Search</button>
         </div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;" id="search-filters">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;" id="search-filters" data-kg-only="true">
           <button class="chip" onclick="setGmailFilter(this,'in:inbox')">Inbox</button>
           <button class="chip on" onclick="setGmailFilter(this,'')">All mail</button>
           <button class="chip" onclick="setGmailFilter(this,'is:sent')">Sent</button>
@@ -1610,6 +1610,11 @@ function applyMode(){
   // update add buttons visibility
   document.querySelectorAll('.add-s').forEach(b=>b.style.display=isMegan?'none':'');
   document.querySelectorAll('.kfbar').forEach(b=>b.style.display=isMegan?'none':'flex');
+  // hide kg-only elements from Megan
+  document.querySelectorAll('[data-kg-only]').forEach(el=>el.style.display=isMegan?'none':'');
+  // also hide the inbox toolbar search section from Megan
+  const inboxList=document.getElementById('v-inbox');
+  if(inboxList) inboxList.style.display=isMegan?'none':'';
 }
 
 // ── MORNING BRIEFING ──
@@ -1717,13 +1722,61 @@ function globalSearch(q){
 function selectSearchResult(type, id, msg){
   closeGSearch();
   document.getElementById('gsearch').value='';
+  const tabs=document.querySelectorAll('.tab');
   if(type==='card'){
-    switchTab('kanban',document.querySelectorAll('.tab')[1]);
+    // Always open in dashboard
+    switchTab('kanban',tabs[1]||tabs[0]);
     setTimeout(()=>openDP(id),100);
   } else if(msg){
-    switchTab('inbox',document.querySelectorAll('.tab')[0]);
-    setTimeout(()=>openInboxMsg(msg),100);
+    if(currentMode==='megan'){
+      // In Megan mode: show email in a panel overlay instead of switching to inbox
+      switchTab('kanban',tabs[1]||tabs[0]);
+      setTimeout(()=>openEmailOverlay(msg),100);
+    } else {
+      switchTab('inbox',tabs[0]);
+      setTimeout(()=>openInboxMsg(msg),100);
+    }
   }
+}
+
+function openEmailOverlay(msg){
+  // Open email in the detail panel (dp) without switching to inbox
+  selectedInboxMsg=msg;
+  document.getElementById('dp-subj').textContent=msg.subject||'';
+  document.getElementById('dp-from').textContent=msg.from+(msg.fromEmail?' <'+msg.fromEmail+'>':'');
+  document.getElementById('dp-date').textContent=msg.date||msg.timeStr||'';
+  const body=document.getElementById('dp-body');
+  body.innerHTML='';
+  const msgs=msg.messages||[msg];
+  const threadBox=document.createElement('div');
+  threadBox.style.cssText='border:1px solid #E2E0DA;border-radius:12px;overflow:hidden;background:#fff;';
+  msgs.forEach((m,idx)=>{
+    const isLast=idx===msgs.length-1;
+    const collapsed=!isLast;
+    const col=avatarColor(m.from);
+    const ini=initials(m.from);
+    const wrapper=document.createElement('div');
+    if(idx>0) wrapper.style.borderTop='1px solid #F0EDE8';
+    const hdr=document.createElement('div');
+    hdr.style.cssText='padding:10px 16px;display:flex;align-items:flex-start;gap:10px;cursor:'+(collapsed?'pointer':'default')+';';
+    hdr.innerHTML=`<div style="width:34px;height:34px;border-radius:50%;background:${col};color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0;">${ini}</div><div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;color:#111;">${x(m.from)}</div><div style="font-size:11px;color:#bbb;">${x(m.timeStr||'')}</div></div>`;
+    const bd=document.createElement('div');
+    bd.style.cssText='display:'+(collapsed?'none':'block')+';padding:0 16px 12px 60px;';
+    const bc=document.createElement('div');
+    bd.appendChild(bc);
+    if(!collapsed) renderBody(bc,m.body,m.snippet,m._raw);
+    hdr.addEventListener('click',()=>{
+      if(bd.style.display==='none'){ bd.style.display='block'; if(!bc.hasChildNodes()) renderBody(bc,m.body,m.snippet,m._raw); }
+      else if(!isLast) bd.style.display='none';
+    });
+    wrapper.appendChild(hdr); wrapper.appendChild(bd);
+    threadBox.appendChild(wrapper);
+  });
+  body.appendChild(threadBox);
+  document.getElementById('dp-note').value='';
+  updDoneBtn({done:false});
+  document.getElementById('dbg').classList.add('open');
+  document.getElementById('dp').classList.add('open');
 }
 function closeGSearch(){
   document.getElementById('gsearch-results').classList.remove('open');
