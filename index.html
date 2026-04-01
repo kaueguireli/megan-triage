@@ -15,6 +15,7 @@
   --blu:#1D5FAD;--blubg:#EFF5FD;
   --grn:#237A42;--grnbg:#EFF8F3;
   --r:10px;--rL:14px;
+  --pur:#6B3FA0;--purbg:#F3EFFE;
 }
 body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-size:14px;line-height:1.5;height:100vh;overflow:hidden;display:flex;flex-direction:column;}
 
@@ -68,6 +69,19 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
 .tpl-btn:hover{background:var(--blubg);color:var(--blu);border-color:#B8D4F8;}
 /* ── SIGNATURE ── */
 .sig-sep{color:var(--t3);font-size:12px;margin-top:8px;}
+/* ── GMAIL HISTORY SEARCH ── */
+.search-result-row{padding:11px 14px;border-bottom:0.5px solid var(--bd);cursor:pointer;transition:background .1s;}
+.search-result-row:hover{background:var(--bg);}
+.search-result-row:last-child{border-bottom:none;}
+.sr-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:2px;}
+.sr-from{font-size:13px;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
+.sr-time{font-size:10px;color:var(--t3);font-family:'Geist Mono',monospace;flex-shrink:0;}
+.sr-subj{font-size:12px;font-weight:500;color:var(--t1);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sr-prev{font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sr-empty{padding:24px;text-align:center;font-size:12px;color:var(--t3);}
+.sr-loading{padding:20px;text-align:center;font-size:12px;color:var(--t3);display:flex;align-items:center;justify-content:center;gap:8px;}
+.spin{width:14px;height:14px;border:2px solid var(--bd);border-top-color:var(--t2);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
 /* ── SEARCH GLOBAL ── */
 .gsearch-wrap{position:relative;flex:1;max-width:320px;}
 .gsearch{width:100%;height:30px;padding:0 10px 0 32px;border:1px solid var(--bd);border-radius:6px;font-family:'Geist',sans-serif;font-size:12px;background:var(--bg);color:var(--t1);outline:none;transition:border-color .12s;}
@@ -184,12 +198,14 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
 .chip:hover{background:var(--bg);border-color:var(--bd2);color:var(--t1);}
 .chip.on{background:var(--t1);color:#fff;border-color:var(--t1);}
 
-.kanban{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:start;}
+.kanban{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;align-items:start;}
 .col-h{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:2px solid var(--bd);margin-bottom:10px;}
 .col-h.hr{border-color:var(--red);}
 .col-h.ha{border-color:var(--amb);}
 .col-h.hb{border-color:var(--blu);}
 .col-h.hg{border-color:var(--bd2);}
+.col-h.hk{border-color:var(--pur);}
+.ck{background:var(--purbg);color:var(--pur);}
 .col-ttl{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t2);}
 .cbadge{font-family:'Geist Mono',monospace;font-size:11px;font-weight:500;padding:2px 7px;border-radius:99px;}
 .cr{background:var(--redbg);color:var(--red);}
@@ -208,6 +224,7 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
 .ec.ab::before{background:var(--blu);}
 .ec.ag::before{background:var(--grn);}
 .ec.an::before{background:var(--bd2);}
+.ec.ak::before{background:var(--pur);}
 .ec-in{padding:12px 12px 10px 16px;}
 .ec-r1{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:2px;}
 .ec-from{font-size:13px;font-weight:600;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
@@ -365,11 +382,24 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
   <!-- ── INBOX VIEW ── -->
   <div class="view on" id="v-inbox">
     <div class="inbox-list">
-      <div class="inbox-toolbar">
-        <input class="inbox-search" id="isearch" placeholder="Search inbox…" oninput="filterInbox()">
-        <button class="btn" onclick="syncAll()" title="Refresh">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5"/><polyline points="13.5,2.5 13.5,5.5 10.5,5.5"/></svg>
-        </button>
+      <div class="inbox-toolbar" style="flex-direction:column;gap:8px;padding:10px 14px;">
+        <div style="display:flex;gap:8px;">
+          <input class="inbox-search" id="isearch" placeholder="Search loaded emails…" oninput="filterInbox()" style="flex:1;">
+          <button class="btn" onclick="syncAll()" title="Refresh">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5"/><polyline points="13.5,2.5 13.5,5.5 10.5,5.5"/></svg>
+          </button>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <input class="inbox-search" id="gmail-search" placeholder="Search all Gmail history…" style="flex:1;" onkeydown="if(event.key==='Enter')searchGmail()">
+          <button class="btn btn-k" onclick="searchGmail()" style="height:30px;padding:0 10px;font-size:12px;">Search</button>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;" id="search-filters">
+          <button class="chip" onclick="setGmailFilter(this,'in:inbox')">Inbox</button>
+          <button class="chip on" onclick="setGmailFilter(this,'')">All mail</button>
+          <button class="chip" onclick="setGmailFilter(this,'is:sent')">Sent</button>
+          <button class="chip" onclick="setGmailFilter(this,'has:attachment')">Attachments</button>
+          <button class="chip" onclick="setGmailFilter(this,'is:unread')">Unread</button>
+        </div>
       </div>
       <div class="inbox-scroll" id="inbox-scroll"></div>
     </div>
@@ -391,6 +421,7 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
           <button class="col-btn c-amb" onclick="moveToCol('review')">🟡 Need Review</button>
           <button class="col-btn c-blu" onclick="moveToCol('waiting')">🔵 Waiting Reply</button>
           <button class="col-btn c-gry" onclick="moveToCol('fyi')">⚪ FYI</button>
+          <button class="col-btn" onclick="moveToCol('kg')" style="background:var(--purbg);color:var(--pur);border-color:#C8A8E8;">🟣 KG Handle</button>
           <div class="sep"></div>
           <button class="btn" onclick="replyEmail()" style="height:28px;font-size:11px;">↩ Reply</button>
           <button class="btn" onclick="forwardEmail()" style="height:28px;font-size:11px;">↪ Forward</button>
@@ -415,6 +446,22 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
         </div>
         <div class="sync"><span class="sdot"></span><span id="slbl">Synced just now</span></div>
       </div>
+      <!-- DASHBOARD SEARCH -->
+      <div style="display:flex;gap:8px;margin-bottom:14px;" id="dash-search-wrap">
+        <div style="position:relative;flex:1;">
+          <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--t3);pointer-events:none;" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/></svg>
+          <input id="dash-gmail-search" placeholder="Search all of Megan's email history…" style="width:100%;height:34px;padding:0 10px 0 30px;border:1px solid var(--bd);border-radius:var(--r);font-family:'Geist',sans-serif;font-size:13px;color:var(--t1);background:var(--white);outline:none;" onkeydown="if(event.key==='Enter')searchGmailDash()" onfocus="this.style.borderColor='var(--bd2)'" onblur="this.style.borderColor='var(--bd)'">
+        </div>
+        <button class="btn btn-k" onclick="searchGmailDash()" style="height:34px;padding:0 14px;">Search</button>
+      </div>
+      <!-- SEARCH RESULTS PANEL -->
+      <div id="dash-search-results" style="display:none;background:var(--white);border:1px solid var(--bd);border-radius:var(--rL);margin-bottom:14px;overflow:hidden;">
+        <div style="padding:10px 16px;border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;">
+          <span id="dash-search-label" style="font-size:13px;font-weight:600;color:var(--t1);">Search results</span>
+          <button onclick="closeDashSearch()" style="border:none;background:none;cursor:pointer;font-size:13px;color:var(--t3);">✕ Close</button>
+        </div>
+        <div id="dash-search-list" style="max-height:400px;overflow-y:auto;"></div>
+      </div>
       <!-- MORNING BRIEFING -->
       <div class="briefing" id="briefing">
         <div class="briefing-left">
@@ -425,11 +472,12 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
         </div>
         <div class="briefing-stats" id="briefing-stats"></div>
       </div>
-      <div class="kstats">
+      <div class="kstats" style="grid-template-columns:repeat(5,minmax(0,1fr));">
         <div class="sc on" onclick="filterCol(this)"><div class="sc-top"><span class="sc-pip" style="background:var(--red)"></span><span class="sc-lbl">Action required</span></div><div class="sc-n" id="cn-action">0</div><div class="sc-h">needs your response</div></div>
         <div class="sc" onclick="filterCol(this)"><div class="sc-top"><span class="sc-pip" style="background:var(--amb)"></span><span class="sc-lbl">Need review</span></div><div class="sc-n" id="cn-review">0</div><div class="sc-h">read &amp; decide</div></div>
         <div class="sc" onclick="filterCol(this)"><div class="sc-top"><span class="sc-pip" style="background:var(--blu)"></span><span class="sc-lbl">Waiting reply</span></div><div class="sc-n" id="cn-waiting">0</div><div class="sc-h">you sent, no reply yet</div></div>
         <div class="sc" onclick="filterCol(this)"><div class="sc-top"><span class="sc-pip" style="background:var(--bd2)"></span><span class="sc-lbl">FYI</span></div><div class="sc-n" id="cn-fyi">0</div><div class="sc-h">no action needed</div></div>
+        <div class="sc" onclick="filterCol(this)"><div class="sc-top"><span class="sc-pip" style="background:var(--pur)"></span><span class="sc-lbl">KG Handle</span></div><div class="sc-n" id="cn-kg">0</div><div class="sc-h">KG will take care</div></div>
       </div>
       <div class="kfbar">
         <span class="fl">Filter:</span>
@@ -445,6 +493,7 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
         <div><div class="col-h ha"><span class="col-ttl">Need Review</span><span class="cbadge ca" id="bd-review">0</span></div><div class="col-body" id="body-review"></div><button class="add-s" onclick="openAdd('review')">+ add</button></div>
         <div><div class="col-h hb"><span class="col-ttl">Waiting Reply</span><span class="cbadge cb" id="bd-waiting">0</span></div><div class="col-body" id="body-waiting"></div><button class="add-s" onclick="openAdd('waiting')">+ add</button></div>
         <div><div class="col-h hg"><span class="col-ttl">FYI</span><span class="cbadge cg" id="bd-fyi">0</span></div><div class="col-body" id="body-fyi"></div><button class="add-s" onclick="openAdd('fyi')">+ add</button></div>
+        <div><div class="col-h hk"><span class="col-ttl" style="display:flex;align-items:center;gap:5px;"><span style="width:16px;height:16px;border-radius:50%;background:var(--pur);color:#fff;font-size:9px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;">KG</span>KG Handle</span><span class="cbadge ck" id="bd-kg">0</span></div><div class="col-body" id="body-kg"></div><button class="add-s" onclick="openAdd('kg')">+ add</button></div>
       </div>
     </div>
   </div>
@@ -515,7 +564,7 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
     <div class="fld"><label>From</label><input id="ff" placeholder="Sender name — company"></div>
     <div class="fld"><label>Subject</label><input id="fs" placeholder="Email subject"></div>
     <div class="fld"><label>Preview</label><input id="fp" placeholder="Short excerpt…"></div>
-    <div class="fld"><label>Column</label><select id="fc"><option value="action">Action Required</option><option value="review">Need Review</option><option value="waiting">Waiting Reply</option><option value="fyi">FYI</option></select></div>
+    <div class="fld"><label>Column</label><select id="fc"><option value="action">Action Required</option><option value="review">Need Review</option><option value="waiting">Waiting Reply</option><option value="fyi">FYI</option><option value="kg">KG Handle</option></select></div>
     <div class="fld"><label>Urgency</label>
       <div class="ugrid" id="upick">
         <div class="uo" data-c="red" onclick="pickU(this,'red')">🔴 Urgent</div>
@@ -541,8 +590,8 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
 <script>
 const CLIENT_ID='849738234351-uu246668g6q0nmm1fvor16mvccon11t0.apps.googleusercontent.com';
 const SCOPES='https://www.googleapis.com/auth/gmail.modify';
-const COLS=['action','review','waiting','fyi'];
-const COL_LBL={action:'Action Required',review:'Need Review',waiting:'Waiting Reply',fyi:'FYI'};
+const COLS=['action','review','waiting','fyi','kg'];
+const COL_LBL={action:'Action Required',review:'Need Review',waiting:'Waiting Reply',fyi:'FYI',kg:'KG Handle'};
 const URG_LBL={red:'Urgent',amber:'This week',blue:'Sent',green:'On track',none:'None'};
 const ACCENT={red:'ar',amber:'aa',blue:'ab',green:'ag',none:'an'};
 const TAG_CLS={red:'ur',amber:'ua',blue:'ub',green:'ug',none:'un'};
@@ -1253,7 +1302,7 @@ function renderKanban(){
 
 function mkCard(e){
   const d=document.createElement('div');
-  d.className=`ec ${ACCENT[e.color]||'an'}${e.done?' done':''}`;
+  d.className=`ec ${e.col==='kg'?'ak':(ACCENT[e.color]||'an')}${e.done?' done':''}`;  
   d.id='c'+e.id;
   d.innerHTML=`<div class="ec-in">
     <div class="ec-r1"><div class="ec-from">${x(e.from)}</div><div class="ec-time">${x(e.time)}</div></div>
@@ -1370,6 +1419,163 @@ function saveCard(){
   save();renderKanban();closeModal();
 }
 
+
+// ── GMAIL HISTORY SEARCH ──
+let gmailSearchFilter='';
+
+function setGmailFilter(btn, filter){
+  gmailSearchFilter=filter;
+  document.querySelectorAll('#search-filters .chip').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+}
+
+async function searchGmail(){
+  const q=document.getElementById('gmail-search').value.trim();
+  if(!q) return;
+  if(!gmailToken){ showToast('Not connected to Gmail'); return; }
+  const scroll=document.getElementById('inbox-scroll');
+  scroll.innerHTML='<div class="sr-loading"><div class="spin"></div>Searching Gmail…</div>';
+  const fullQ=gmailSearchFilter?q+' '+gmailSearchFilter:q;
+  try{
+    const r=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=30&q='+encodeURIComponent(fullQ));
+    const d=await r.json();
+    if(!d.threads||!d.threads.length){
+      scroll.innerHTML='<div class="sr-empty">No results for "'+x(q)+'"</div>';
+      return;
+    }
+    // Fetch thread summaries in batches
+    const threads=[];
+    for(let i=0;i<Math.min(d.threads.length,20);i+=8){
+      const batch=d.threads.slice(i,i+8);
+      const results=await Promise.all(batch.map(t=>
+        gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/'+t.id+'?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date')
+          .then(r=>r.json())
+      ));
+      threads.push(...results);
+    }
+    // Render results
+    scroll.innerHTML='<div style="padding:8px 14px;font-size:11px;color:var(--t3);border-bottom:1px solid var(--bd);">'+threads.length+' results for "'+x(q)+'" &nbsp;·&nbsp; <a href="#" onclick="resetInboxSearch(event)" style="color:var(--blu);">Back to inbox</a></div>';
+    threads.forEach(thread=>{
+      if(!thread.messages||!thread.messages.length) return;
+      const last=thread.messages[thread.messages.length-1];
+      const H=last.payload&&last.payload.headers||[];
+      const get=k=>(H.find(h=>h.name.toLowerCase()===k.toLowerCase())||{}).value||'';
+      const from=get('From').replace(/<[^>]+>/,'').replace(/"/g,'').trim()||get('From');
+      const subj=get('Subject')||'(no subject)';
+      const t=new Date(parseInt(last.internalDate));
+      const now=new Date();
+      let timeStr;
+      if(t.toDateString()===now.toDateString()) timeStr=t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      else if(now-t<7*86400000) timeStr=t.toLocaleDateString([],{weekday:'short'});
+      else timeStr=t.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'});
+      const div=document.createElement('div');
+      div.className='search-result-row';
+      div.innerHTML=`<div class="sr-top"><div class="sr-from">${x(from)}</div><div class="sr-time">${timeStr}</div></div>
+        <div class="sr-subj">${x(subj)}</div>
+        <div class="sr-prev">${x(thread.snippet||'')}</div>`;
+      div.onclick=()=>openSearchResult(thread.id);
+      scroll.appendChild(div);
+    });
+  }catch(e){
+    scroll.innerHTML='<div class="sr-empty">Error searching. Try again.</div>';
+    console.error(e);
+  }
+}
+
+async function openSearchResult(threadId){
+  // Fetch full thread and open it
+  try{
+    const r=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/'+threadId+'?format=full');
+    const d=await r.json();
+    const thread=parseThread(d);
+    if(thread) openInboxMsg(thread);
+  }catch(e){ showToast('Could not load thread'); }
+}
+
+function resetInboxSearch(e){
+  e.preventDefault();
+  document.getElementById('gmail-search').value='';
+  renderInboxList(inboxMsgs);
+}
+
+// ── DASHBOARD SEARCH ──
+async function searchGmailDash(){
+  const q=document.getElementById('dash-gmail-search').value.trim();
+  if(!q) return;
+  if(!gmailToken){ showToast('Not connected to Gmail'); return; }
+  const panel=document.getElementById('dash-search-results');
+  const list=document.getElementById('dash-search-list');
+  const label=document.getElementById('dash-search-label');
+  panel.style.display='block';
+  label.textContent='Searching…';
+  list.innerHTML='<div class="sr-loading"><div class="spin"></div>Searching all email history…</div>';
+  try{
+    const r=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=25&q='+encodeURIComponent(q));
+    const d=await r.json();
+    if(!d.threads||!d.threads.length){
+      label.textContent='No results for "'+q+'"';
+      list.innerHTML='<div class="sr-empty">No emails found matching "'+x(q)+'"</div>';
+      return;
+    }
+    label.textContent=d.threads.length+' results for "'+x(q)+'"';
+    list.innerHTML='';
+    // Fetch thread metadata
+    const threads=[];
+    for(let i=0;i<Math.min(d.threads.length,20);i+=8){
+      const batch=d.threads.slice(i,i+8);
+      const results=await Promise.all(batch.map(t=>
+        gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/'+t.id+'?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date')
+          .then(r=>r.json())
+      ));
+      threads.push(...results);
+    }
+    threads.forEach(thread=>{
+      if(!thread.messages||!thread.messages.length) return;
+      const last=thread.messages[thread.messages.length-1];
+      const H=last.payload&&last.payload.headers||[];
+      const get=k=>(H.find(h=>h.name.toLowerCase()===k.toLowerCase())||{}).value||'';
+      const from=get('From').replace(/<[^>]+>/,'').replace(/"/g,'').trim();
+      const subj=get('Subject')||'(no subject)';
+      const t=new Date(parseInt(last.internalDate));
+      const now=new Date();
+      let timeStr;
+      if(t.toDateString()===now.toDateString()) timeStr='Today '+t.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      else timeStr=t.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+      const div=document.createElement('div');
+      div.className='search-result-row';
+      div.innerHTML=`
+        <div class="sr-top"><div class="sr-from">${x(from)}</div><div class="sr-time">${timeStr}</div></div>
+        <div class="sr-subj">${x(subj)}</div>
+        <div class="sr-prev">${x(thread.snippet||'')}</div>`;
+      div.onclick=async()=>{
+        // Switch to inbox view and open the thread
+        const tabs=document.querySelectorAll('.tab');
+        switchTab('inbox', tabs[0]);
+        tabs[0].classList.add('on');
+        tabs[1].classList.remove('on');
+        document.getElementById('v-inbox').classList.add('on');
+        document.getElementById('v-kanban').classList.remove('on');
+        try{
+          const fr=await gfetch('https://gmail.googleapis.com/gmail/v1/users/me/threads/'+thread.id+'?format=full');
+          const fd=await fr.json();
+          const fullThread=parseThread(fd);
+          if(fullThread) openInboxMsg(fullThread);
+        }catch(e){ showToast('Could not open thread'); }
+      };
+      list.appendChild(div);
+    });
+  }catch(e){
+    label.textContent='Search error';
+    list.innerHTML='<div class="sr-empty">Error searching. Please try again.</div>';
+    console.error(e);
+  }
+}
+
+function closeDashSearch(){
+  document.getElementById('dash-search-results').style.display='none';
+  document.getElementById('dash-gmail-search').value='';
+}
+
 // ── SYNC ──
 function syncAll(){fetchInbox();}
 
@@ -1418,6 +1624,7 @@ function updateBriefing(){
   const urgent=cards.filter(e=>e.col==='action'&&e.color==='red'&&!e.done).length;
   const overdue=cards.filter(e=>e.col==='waiting'&&!e.done&&isOverdue(e)).length;
   const dueToday=cards.filter(e=>!e.done&&e.deadline&&isDeadlineToday(e)).length;
+  const kgPending=cards.filter(e=>e.col==='kg'&&!e.done).length;
 
   const subEl=document.getElementById('briefing-sub');
   if(subEl){
@@ -1432,6 +1639,7 @@ function updateBriefing(){
   if(action>0) stats.innerHTML+=`<div class="bs bs-red">${action} action required</div>`;
   if(overdue>0) stats.innerHTML+=`<div class="bs bs-amb">${overdue} follow-up overdue</div>`;
   if(dueToday>0) stats.innerHTML+=`<div class="bs bs-amb">${dueToday} deadline today</div>`;
+  if(kgPending>0) stats.innerHTML+=`<div class="bs" style="background:var(--purbg);color:var(--pur);">${kgPending} for KG</div>`;
   if(action===0&&overdue===0&&dueToday===0) stats.innerHTML+=`<div class="bs bs-grn"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="2,8 6,12 14,4"/></svg>All clear</div>`;
 }
 
