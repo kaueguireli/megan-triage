@@ -370,10 +370,10 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
         </div>
         <div class="inbox-filters" id="ifilters" data-kg-only="true">
           <button class="ifilter on" onclick="setGmailFilter(this,'in:inbox')">Inbox</button>
-          <button class="ifilter" onclick="setGmailFilter(this,'')">All mail</button>
-          <button class="ifilter" onclick="setGmailFilter(this,'is:sent')">Sent</button>
-          <button class="ifilter" onclick="setGmailFilter(this,'has:attachment')">Attachments</button>
-          <button class="ifilter" onclick="setGmailFilter(this,'is:unread')">Unread</button>
+          <button class="ifilter" onclick="setGmailFilter(this,'in:anywhere -in:spam -in:trash')">All mail</button>
+          <button class="ifilter" onclick="setGmailFilter(this,'in:sent')">Sent</button>
+          <button class="ifilter" onclick="setGmailFilter(this,'has:attachment in:inbox')">Attachments</button>
+          <button class="ifilter" onclick="setGmailFilter(this,'is:unread in:inbox')">Unread</button>
         </div>
       </div>
       <div class="inbox-scroll" id="inbox-scroll"></div>
@@ -763,7 +763,7 @@ async function fetchInbox(){
   document.getElementById('slbl').textContent='Syncing…';
   showSkeletons();
   try{
-    const q=encodeURIComponent(gmailFilter||'in:inbox');
+    const q=encodeURIComponent(gmailFilter!==undefined&&gmailFilter!==null?gmailFilter:'in:inbox');
     const r=await gfetch(`https://gmail.googleapis.com/gmail/v1/users/me/threads?maxResults=40&q=${q}`);
     const d=await r.json();
     if(!d.threads){renderInboxList([]);return;}
@@ -964,7 +964,7 @@ function updateBadge(){
 }
 
 function setGmailFilter(btn,filter){
-  gmailFilter=filter||'in:inbox';
+  gmailFilter=filter;
   document.querySelectorAll('.ifilter').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
   fetchInbox();
