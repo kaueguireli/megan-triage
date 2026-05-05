@@ -659,6 +659,9 @@ let gmailFilter='in:inbox';
 
 // ── AUTH ──
 window.addEventListener('load',()=>{
+  // If inside a silent-refresh iframe, do nothing (parent reads our URL)
+  if(window.parent!==window) return;
+  
   if(!checkOAuth()){
     document.getElementById('auth').style.display='flex';
     document.getElementById('main').style.display='none';
@@ -756,16 +759,19 @@ function doAuthKeepState(){
   doAuth();
 }
 
-setInterval(()=>{
-  const exp=parseInt(localStorage.getItem('gtk_exp')||'0');
-  const left=exp-Date.now();
-  if(gmailToken&&left>0&&left<600000){
-    // 10 min left — try silent refresh
-    silentRefresh();
-  } else if(gmailToken&&left<=0){
-    showRefreshBanner();
-  }
-},60000); // check every minute instead of 5
+// Wait 65 seconds before first check so login can complete fully
+setTimeout(()=>{
+  setInterval(()=>{
+    const exp=parseInt(localStorage.getItem('gtk_exp')||'0');
+    if(!gmailToken||!exp) return; // not logged in yet
+    const left=exp-Date.now();
+    if(left>0&&left<600000){
+      silentRefresh();
+    } else if(left<=0){
+      showRefreshBanner();
+    }
+  },60000);
+},65000);
 
 function showMain(){
   document.getElementById('auth').style.display='none';
@@ -822,7 +828,13 @@ function switchTab(view,btn){
 // ── GMAIL ──
 async function gfetch(url,opts={}){
   const r=await fetch(url,{...opts,headers:{Authorization:'Bearer '+gmailToken,...(opts.headers||{})}});
-  if(r.status===401){localStorage.removeItem('gtk');localStorage.removeItem('gtk_exp');showToast('Session expired — please sign in again');setTimeout(()=>location.reload(),2000);}
+  if(r.status===401){
+    // Don't reload immediately — just show refresh banner
+    gmailToken=null;
+    localStorage.removeItem('gtk');
+    localStorage.removeItem('gtk_exp');
+    showRefreshBanner();
+  }
   return r;
 }
 
