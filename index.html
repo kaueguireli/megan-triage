@@ -659,9 +659,6 @@ let gmailFilter='in:inbox';
 
 // ── AUTH ──
 window.addEventListener('load',()=>{
-  // If inside a silent-refresh iframe, do nothing (parent reads our URL)
-  if(window.parent!==window) return;
-  
   if(!checkOAuth()){
     document.getElementById('auth').style.display='flex';
     document.getElementById('main').style.display='none';
@@ -701,87 +698,37 @@ function doAuth(){
   location.href=`https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${rd}&response_type=token&scope=${sc}&prompt=consent`;
 }
 
-// Silent token refresh via hidden iframe
-function silentRefresh(){
-  try{
-    const sc=encodeURIComponent(SCOPES);
-    const rd=encodeURIComponent(location.href.split('?')[0]);
-    const url=`https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${rd}&response_type=token&scope=${sc}&prompt=none&login_hint=${encodeURIComponent(window._userEmail||'')}`;
-    const iframe=document.createElement('iframe');
-    iframe.style.cssText='display:none;width:1px;height:1px;position:fixed;top:-100px;';
-    iframe.src=url;
-    document.body.appendChild(iframe);
-    // Read token from iframe URL when it redirects back
-    let attempts=0;
-    const poll=setInterval(()=>{
-      attempts++;
-      try{
-        const h=iframe.contentWindow.location.hash;
-        if(h&&h.includes('access_token')){
-          const p=new URLSearchParams(h.replace('#',''));
-          const tk=p.get('access_token');
-          const exp=p.get('expires_in');
-          if(tk){
-            gmailToken=tk;
-            const expiry=Date.now()+(parseInt(exp||3600)-120)*1000;
-            localStorage.setItem('gtk',tk);
-            localStorage.setItem('gtk_exp',expiry.toString());
-            clearInterval(poll);
-            document.body.removeChild(iframe);
-            showToast('Session refreshed automatically');
-            return;
-          }
-        }
-      }catch(e){/* cross-origin, keep polling */}
-      if(attempts>30){
-        clearInterval(poll);
-        document.body.removeChild(iframe);
-        // If silent refresh failed, show non-intrusive banner
-        showRefreshBanner();
-      }
-    },500);
-  }catch(e){showRefreshBanner();}
+// Token check — only show banner if truly expired after login
+function checkTokenExpiry(){
+  const exp=parseInt(localStorage.getItem('gtk_exp')||'0');
+  if(!gmailToken || !exp) return;
+  const left=exp-Date.now();
+  if(left<=0){
+    showRefreshBanner();
+  }
 }
-
 function showRefreshBanner(){
-  let banner=document.getElementById('refresh-banner');
-  if(banner) return; // already showing
-  banner=document.createElement('div');
-  banner.id='refresh-banner';
-  banner.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#111;color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:1000;font-size:13px;';
-  banner.innerHTML='<span>Session expiring soon — click to stay logged in</span><button onclick="doAuthKeepState()" style="background:var(--blu);color:#fff;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-family:Geist,sans-serif;">Refresh session</button>';
-  document.body.appendChild(banner);
+  if(document.getElementById('refresh-banner')) return;
+  const b=document.createElement('div');
+  b.id='refresh-banner';
+  b.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#1a1a18;color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:9999;font-size:13px;font-family:Geist,sans-serif;';
+  const msg=document.createElement('span');
+  msg.textContent='Session expired — please sign in again';
+  const btn=document.createElement('button');
+  btn.textContent='Sign in again';
+  btn.style.cssText='background:#1D5FAD;color:#fff;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-family:Geist,sans-serif;';
+  btn.onclick=function(){localStorage.removeItem('gtk');localStorage.removeItem('gtk_exp');location.reload();};
+  b.appendChild(msg);
+  b.appendChild(btn);
+  document.body.appendChild(b);
 }
-
-function doAuthKeepState(){
-  // Save current scroll position and state before redirecting
-  localStorage.setItem('clt_returnto','dashboard');
-  doAuth();
-}
-
-// Wait 65 seconds before first check so login can complete fully
-setTimeout(()=>{
-  setInterval(()=>{
-    const exp=parseInt(localStorage.getItem('gtk_exp')||'0');
-    if(!gmailToken||!exp) return; // not logged in yet
-    const left=exp-Date.now();
-    if(left>0&&left<600000){
-      silentRefresh();
-    } else if(left<=0){
-      showRefreshBanner();
-    }
-  },60000);
-},65000);
+setInterval(checkTokenExpiry, 60000);
 
 function showMain(){
   document.getElementById('auth').style.display='none';
   document.getElementById('main').style.display='flex';
-  // Remove refresh banner if showing
   const banner=document.getElementById('refresh-banner');
   if(banner) banner.remove();
-  // Restore tab if returning from refresh
-  const returnTo=localStorage.getItem('clt_returnto');
-  if(returnTo==='dashboard') localStorage.removeItem('clt_returnto');
   document.getElementById('tabs').style.display='flex';
   document.getElementById('sync-btn').style.display='flex';
   document.getElementById('compose-btn').style.display='flex';
@@ -828,13 +775,7 @@ function switchTab(view,btn){
 // ── GMAIL ──
 async function gfetch(url,opts={}){
   const r=await fetch(url,{...opts,headers:{Authorization:'Bearer '+gmailToken,...(opts.headers||{})}});
-  if(r.status===401){
-    // Don't reload immediately — just show refresh banner
-    gmailToken=null;
-    localStorage.removeItem('gtk');
-    localStorage.removeItem('gtk_exp');
-    showRefreshBanner();
-  }
+  if(r.status===401){ gmailToken=null; localStorage.removeItem('gtk'); localStorage.removeItem('gtk_exp'); showRefreshBanner(); }
   return r;
 }
 
