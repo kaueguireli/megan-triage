@@ -698,16 +698,84 @@ function doAuth(){
   location.href=`https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${rd}&response_type=token&scope=${sc}&prompt=consent`;
 }
 
+// Silent token refresh via hidden iframe
+function silentRefresh(){
+  try{
+    const sc=encodeURIComponent(SCOPES);
+    const rd=encodeURIComponent(location.href.split('?')[0]);
+    const url=`https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${rd}&response_type=token&scope=${sc}&prompt=none&login_hint=${encodeURIComponent(window._userEmail||'')}`;
+    const iframe=document.createElement('iframe');
+    iframe.style.cssText='display:none;width:1px;height:1px;position:fixed;top:-100px;';
+    iframe.src=url;
+    document.body.appendChild(iframe);
+    // Read token from iframe URL when it redirects back
+    let attempts=0;
+    const poll=setInterval(()=>{
+      attempts++;
+      try{
+        const h=iframe.contentWindow.location.hash;
+        if(h&&h.includes('access_token')){
+          const p=new URLSearchParams(h.replace('#',''));
+          const tk=p.get('access_token');
+          const exp=p.get('expires_in');
+          if(tk){
+            gmailToken=tk;
+            const expiry=Date.now()+(parseInt(exp||3600)-120)*1000;
+            localStorage.setItem('gtk',tk);
+            localStorage.setItem('gtk_exp',expiry.toString());
+            clearInterval(poll);
+            document.body.removeChild(iframe);
+            showToast('Session refreshed automatically');
+            return;
+          }
+        }
+      }catch(e){/* cross-origin, keep polling */}
+      if(attempts>30){
+        clearInterval(poll);
+        document.body.removeChild(iframe);
+        // If silent refresh failed, show non-intrusive banner
+        showRefreshBanner();
+      }
+    },500);
+  }catch(e){showRefreshBanner();}
+}
+
+function showRefreshBanner(){
+  let banner=document.getElementById('refresh-banner');
+  if(banner) return; // already showing
+  banner=document.createElement('div');
+  banner.id='refresh-banner';
+  banner.style.cssText='position:fixed;bottom:0;left:0;right:0;background:#111;color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;z-index:1000;font-size:13px;';
+  banner.innerHTML='<span>Session expiring soon — click to stay logged in</span><button onclick="doAuthKeepState()" style="background:var(--blu);color:#fff;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-family:Geist,sans-serif;">Refresh session</button>';
+  document.body.appendChild(banner);
+}
+
+function doAuthKeepState(){
+  // Save current scroll position and state before redirecting
+  localStorage.setItem('clt_returnto','dashboard');
+  doAuth();
+}
+
 setInterval(()=>{
   const exp=parseInt(localStorage.getItem('gtk_exp')||'0');
   const left=exp-Date.now();
-  if(gmailToken&&left<600000&&left>0) doAuth();
-  else if(gmailToken&&left<=0){showToast('Session expired — please sign in again');setTimeout(()=>location.reload(),2000);}
-},300000);
+  if(gmailToken&&left>0&&left<600000){
+    // 10 min left — try silent refresh
+    silentRefresh();
+  } else if(gmailToken&&left<=0){
+    showRefreshBanner();
+  }
+},60000); // check every minute instead of 5
 
 function showMain(){
   document.getElementById('auth').style.display='none';
   document.getElementById('main').style.display='flex';
+  // Remove refresh banner if showing
+  const banner=document.getElementById('refresh-banner');
+  if(banner) banner.remove();
+  // Restore tab if returning from refresh
+  const returnTo=localStorage.getItem('clt_returnto');
+  if(returnTo==='dashboard') localStorage.removeItem('clt_returnto');
   document.getElementById('tabs').style.display='flex';
   document.getElementById('sync-btn').style.display='flex';
   document.getElementById('compose-btn').style.display='flex';
@@ -1583,6 +1651,7 @@ async function getUserEmail(){
     const r=await gfetch('https://www.googleapis.com/oauth2/v1/userinfo');
     const d=await r.json();
     if(d.email){
+      window._userEmail=d.email;
       const el=document.getElementById('user-lbl');
       if(el){el.textContent=d.email;el.style.display='block';}
     }
