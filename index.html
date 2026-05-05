@@ -589,7 +589,7 @@ body{font-family:'Geist',sans-serif;background:var(--bg);color:var(--t1);font-si
 
 <script>
 const CLIENT_ID='849738234351-uu246668g6q0nmm1fvor16mvccon11t0.apps.googleusercontent.com';
-const SCOPES='https://www.googleapis.com/auth/gmail.modify';
+const SCOPES='https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive.appdata';
 const COLS=['action','review','waiting','fyi','kg'];
 const COL_LBL={action:'Action Required',review:'Need Review',waiting:'Waiting Reply',fyi:'FYI',kg:'KG Handle'};
 const URG_LBL={red:'Urgent',amber:'This week',blue:'Sent',green:'On track',none:'None'};
@@ -616,19 +616,75 @@ function checkOAuth(){
   if(h&&h.includes('access_token')){
     const p=new URLSearchParams(h.replace('#',''));
     const tk=p.get('access_token');
+    const exp=p.get('expires_in');
     if(tk){
       gmailToken=tk;
-      sessionStorage.setItem('gtk',tk);
+      // Save token + expiry to localStorage for cross-device/session persistence
+      const expiry=Date.now()+(parseInt(exp||3600)-120)*1000; // 2min buffer
+      localStorage.setItem('gtk',tk);
+      localStorage.setItem('gtk_exp',expiry.toString());
       history.replaceState({},'',location.pathname);
       showMain();
       fetchInbox();
+      loadCardsFromDrive();
       return true;
     }
   }
-  const stored=sessionStorage.getItem('gtk');
-  if(stored){ gmailToken=stored; showMain(); fetchInbox(); return true; }
+  // Check localStorage for saved token
+  const stored=localStorage.getItem('gtk');
+  const expiry=parseInt(localStorage.getItem('gtk_exp')||'0');
+  if(stored && Date.now()<expiry){
+    gmailToken=stored;
+    showMain();
+    fetchInbox();
+    loadCardsFromDrive();
+    return true;
+  }
+  // Token expired — clear and show login
+  if(stored){ localStorage.removeItem('gtk'); localStorage.removeItem('gtk_exp'); }
   return false;
 }
+
+// Silent re-auth: open popup to refresh token without full page redirect
+function silentReauth(){
+  const sc=encodeURIComponent(SCOPES);
+  const rd=encodeURIComponent(location.href.split('?')[0]);
+  const url=`https://accounts.google.com/o/oauth2/v2/auth?client_id=${CLIENT_ID}&redirect_uri=${rd}&response_type=token&scope=${sc}&prompt=none`;
+  const popup=window.open(url,'_blank','width=1,height=1,left=-1000');
+  // The popup will redirect back and we check for token in its URL
+  const interval=setInterval(()=>{
+    try{
+      if(popup&&popup.location&&popup.location.hash&&popup.location.hash.includes('access_token')){
+        const p=new URLSearchParams(popup.location.hash.replace('#',''));
+        const tk=p.get('access_token');
+        const exp=p.get('expires_in');
+        if(tk){
+          gmailToken=tk;
+          const expiry=Date.now()+(parseInt(exp||3600)-120)*1000;
+          localStorage.setItem('gtk',tk);
+          localStorage.setItem('gtk_exp',expiry.toString());
+          popup.close();
+          clearInterval(interval);
+          showToast('Session refreshed');
+        }
+      }
+      if(popup&&popup.closed) clearInterval(interval);
+    }catch(e){}
+  },500);
+  setTimeout(()=>{ clearInterval(interval); if(popup&&!popup.closed)popup.close(); },15000);
+}
+
+// Check token expiry every 5 min, refresh proactively
+setInterval(()=>{
+  const expiry=parseInt(localStorage.getItem('gtk_exp')||'0');
+  const timeLeft=expiry-Date.now();
+  if(gmailToken && timeLeft<600000 && timeLeft>0){ // less than 10min left
+    silentReauth();
+  } else if(gmailToken && timeLeft<=0){
+    showToast('Session expired — please sign in again');
+    setTimeout(()=>{ location.reload(); },2000);
+  }
+},300000); // check every 5min
 
 function doAuth(){
   const sc=encodeURIComponent(SCOPES);
@@ -655,6 +711,11 @@ function showMain(){
   updateBriefing();
   applyMode();
   getUserEmail();
+  // Load from Drive if token available (may already be called from checkOAuth)
+  if(gmailToken && !window._driveLoaded){
+    window._driveLoaded=true;
+    loadCardsFromDrive();
+  }
   // insert signature on new compose
   setTimeout(insertSignature,100);
 }
@@ -692,7 +753,7 @@ async function fetchInbox(){
   }catch(e){
     console.error('inbox',e);
     if(e.message&&e.message.includes('401')){
-      sessionStorage.removeItem('gtk');
+      localStorage.removeItem('gtk'); localStorage.removeItem('gtk_exp');
       document.getElementById('inbox-scroll').innerHTML='<div style="padding:24px;text-align:center;font-size:12px;color:var(--t3);">Session expired — <a href="#" onclick="doAuth()" style="color:var(--blu);">sign in again</a></div>';
     } else {
       document.getElementById('inbox-scroll').innerHTML='<div style="padding:24px;text-align:center;font-size:12px;color:var(--t3);">Error loading. <a href="#" onclick="syncAll()" style="color:var(--blu);">Retry</a></div>';
@@ -1577,7 +1638,10 @@ function closeDashSearch(){
 }
 
 // ── SYNC ──
-function syncAll(){fetchInbox();}
+function syncAll(){
+  fetchInbox();
+  loadCardsFromDrive();
+}
 
 // ── UTILS ──
 
@@ -1826,7 +1890,75 @@ async function unsubscribeEmail(){
 }
 
 
-function save(){localStorage.setItem('clt3',JSON.stringify(cards));}
+function save(){
+  localStorage.setItem('clt3',JSON.stringify(cards));
+  // Async sync to Drive (debounced)
+  clearTimeout(window._saveTimer);
+  window._saveTimer=setTimeout(saveCardsToDrive,2000);
+}
+
+const DRIVE_FILE='colab_triage_cards.json';
+
+async function saveCardsToDrive(){
+  if(!gmailToken) return;
+  try{
+    // Find or create the file in appDataFolder
+    const listRes=await fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27'+DRIVE_FILE+'%27&fields=files(id)',{
+      headers:{Authorization:'Bearer '+gmailToken}
+    });
+    const listData=await listRes.json();
+    const fileId=listData.files&&listData.files[0]&&listData.files[0].id;
+    const body=JSON.stringify({cards,mode:currentMode,savedAt:new Date().toISOString()});
+    const blob=new Blob([body],{type:'application/json'});
+    if(fileId){
+      // Update existing file
+      await fetch('https://www.googleapis.com/upload/drive/v3/files/'+fileId+'?uploadType=media',{
+        method:'PATCH',
+        headers:{Authorization:'Bearer '+gmailToken,'Content-Type':'application/json'},
+        body:blob
+      });
+    } else {
+      // Create new file
+      const meta=JSON.stringify({name:DRIVE_FILE,parents:['appDataFolder']});
+      const form=new FormData();
+      form.append('metadata',new Blob([meta],{type:'application/json'}));
+      form.append('file',blob);
+      await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',{
+        method:'POST',
+        headers:{Authorization:'Bearer '+gmailToken},
+        body:form
+      });
+    }
+    document.getElementById('slbl').textContent='Synced · '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  }catch(e){ console.error('Drive save error',e); }
+}
+
+async function loadCardsFromDrive(){
+  if(!gmailToken) return;
+  try{
+    const listRes=await fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27'+DRIVE_FILE+'%27&fields=files(id,modifiedTime)',{
+      headers:{Authorization:'Bearer '+gmailToken}
+    });
+    const listData=await listRes.json();
+    const file=listData.files&&listData.files[0];
+    if(!file) return; // no saved data yet
+    const fileRes=await fetch('https://www.googleapis.com/drive/v3/files/'+file.id+'?alt=media',{
+      headers:{Authorization:'Bearer '+gmailToken}
+    });
+    const data=await fileRes.json();
+    if(data.cards&&Array.isArray(data.cards)){
+      // Merge: Drive is source of truth, but keep any local-only cards
+      const driveIds=new Set(data.cards.map(c=>c.id));
+      const localOnly=cards.filter(c=>!driveIds.has(c.id));
+      cards=[...data.cards,...localOnly];
+      localStorage.setItem('clt3',JSON.stringify(cards));
+      renderKanban();
+      updateBriefing();
+      showToast('Dashboard synced ✓');
+    }
+    if(data.mode) currentMode=data.mode;
+  }catch(e){ console.error('Drive load error',e); }
+}
 function x(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 // keyboard shortcuts for inbox triage
